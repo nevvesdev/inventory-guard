@@ -1,0 +1,19 @@
+### Criar produto
+POST http://localhost:8080/api/v1/products
+Content-Type: application/json
+
+{
+  "sku": "IPHONE-15-128",
+  "name": "iPhone 15 128GB",
+  "price": 5999.90,
+  "initialQuantity": 1
+}
+
+### Listar produtos
+GET http://localhost:8080/api/v1/products?page=0&size=10
+
+### Buscar produto por id
+GET http://localhost:8080/api/v1/products/{{productId}}
+
+### Consultar estoque do produto
+GET http://localhost:8080/api/v1/products/{{productId}}/stock
