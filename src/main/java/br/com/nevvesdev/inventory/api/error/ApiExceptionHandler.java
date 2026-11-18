@@ -1,6 +1,8 @@
 package br.com.nevvesdev.inventory.api.error;
 
 import br.com.nevvesdev.inventory.domain.exception.DuplicateSkuException;
+import br.com.nevvesdev.inventory.domain.exception.InsufficientStockException;
+import br.com.nevvesdev.inventory.domain.exception.OrderNotFoundException;
 import br.com.nevvesdev.inventory.domain.exception.ProductNotFoundException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -30,10 +32,26 @@ public class ApiExceptionHandler extends ResponseEntityExceptionHandler {
         return problem;
     }
 
+    @ExceptionHandler(OrderNotFoundException.class)
+    public ProblemDetail handleOrderNotFound(OrderNotFoundException ex) {
+        ProblemDetail problem = ProblemDetail.forStatusAndDetail(HttpStatus.NOT_FOUND, ex.getMessage());
+        problem.setTitle("Pedido não encontrado");
+        return problem;
+    }
+
     @ExceptionHandler(DuplicateSkuException.class)
     public ProblemDetail handleDuplicateSku(DuplicateSkuException ex) {
         ProblemDetail problem = ProblemDetail.forStatusAndDetail(HttpStatus.CONFLICT, ex.getMessage());
         problem.setTitle("SKU duplicado");
+        return problem;
+    }
+
+    @ExceptionHandler(InsufficientStockException.class)
+    public ProblemDetail handleInsufficientStock(InsufficientStockException ex) {
+        ProblemDetail problem = ProblemDetail.forStatusAndDetail(HttpStatus.CONFLICT, ex.getMessage());
+        problem.setTitle("Estoque insuficiente");
+        problem.setProperty("productId", ex.getProductId());
+        problem.setProperty("requestedQuantity", ex.getRequestedQuantity());
         return problem;
     }
 
