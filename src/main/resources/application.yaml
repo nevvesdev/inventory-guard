@@ -26,3 +26,6 @@ management:
   endpoint:
     health:
       show-details: when-authorized
+inventory:
+  stock:
+    strategy: ${STOCK_STRATEGY:conditional-update}
