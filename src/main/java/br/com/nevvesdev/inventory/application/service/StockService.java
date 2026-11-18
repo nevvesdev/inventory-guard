@@ -6,6 +6,8 @@ import br.com.nevvesdev.inventory.domain.repository.StockRepository;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.UUID;
 
 @Service
@@ -22,5 +24,17 @@ public class StockService {
         return stockRepository.findByProductId(productId)
                 .map(StockView::from)
                 .orElseThrow(() -> new ProductNotFoundException(productId));
+    }
+
+    @Transactional
+    public StockView replenish(UUID productId, int quantity) {
+        Instant now = Instant.now().truncatedTo(ChronoUnit.MICROS);
+
+        int updated = stockRepository.increment(productId, quantity, now);
+        if (updated == 0) {
+            throw new ProductNotFoundException(productId);
+        }
+
+        return getByProductId(productId);
     }
 }
