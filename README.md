@@ -40,9 +40,34 @@ Health check: `http://localhost:8080/actuator/health`
 
 ## Testes
 
+Os testes de integração usam Testcontainers: basta ter o Docker em execução, sem subir nada manualmente.
+
 ```bash
-docker compose up -d
 ./mvnw verify
+```
+
+## Controle de concorrência
+
+A reserva de estoque é feita por uma de três estratégias, escolhida pela propriedade `inventory.stock.strategy` (variável de ambiente `STOCK_STRATEGY`):
+
+| Estratégia | Valor | Como funciona | Observações |
+|---|---|---|---|
+| Update condicional | `conditional-update` (padrão) | `UPDATE ... WHERE quantity >= :n`; o banco decide | Sem lock explícito, simples e rápido |
+| Lock pessimista | `pessimistic-lock` | `SELECT ... FOR UPDATE` e depois decrementa | Concorrentes esperam na fila da linha |
+| Lock otimista | `optimistic-lock` | Coluna `version` e retentativa do pedido | Sob muita disputa, algumas tentativas se repetem |
+
+Em todas, a baixa de estoque e o registro do pedido acontecem na mesma transação, e os itens são processados em ordem fixa de produto para evitar deadlock.
+
+### Testes de concorrência
+
+Os mesmos cenários rodam contra as três estratégias, com PostgreSQL real:
+
+- 20 compras simultâneas de um produto com 1 unidade: exatamente 1 sucesso
+- 30 compras simultâneas de um produto com 5 unidades: exatamente 5 sucessos
+- Pedidos com os mesmos produtos em ordens opostas: nenhum deadlock
+
+```bash
+./mvnw test -Dtest='*StockConcurrencyTest'
 ```
 
 ## Arquitetura
@@ -150,7 +175,7 @@ erDiagram
 - [x] Fase 0: scaffold, Docker Compose, Flyway e CI
 - [x] Fase 1: modelo de domínio, migrations e endpoints básicos
 - [x] Fase 2: baixa atômica e transação
-- [ ] Fase 3: testes de concorrência com Testcontainers
+- [x] Fase 3: testes de concorrência com Testcontainers
 - [ ] Fase 4: idempotência, ledger de movimentações e erros padronizados
 - [ ] Fase 5: OpenAPI e refinamento da documentação
 - [ ] Opcional: reserva de estoque com expiração
