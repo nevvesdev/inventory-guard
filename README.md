@@ -68,14 +68,43 @@ br.com.nevvesdev.inventory
 
 - Estoque separado do produto: o registro mais disputado do sistema fica isolado.
 - O banco é a última linha de defesa: `CHECK (quantity >= 0)`, `UNIQUE (sku)` e chaves estrangeiras.
-- Nenhuma operação altera estoque com ler, somar e salvar. Toda mutação será atômica no banco (Fase 2).
+- A baixa de estoque é um `UPDATE` condicional atômico: o banco decide se há saldo, sem ler e decidir na aplicação.
+- Pedido e baixa de estoque ocorrem na mesma transação: se qualquer item falha, nada é gravado.
+- Itens do pedido são processados em ordem fixa de produto, o que evita deadlock entre pedidos concorrentes.
+- Itens repetidos do mesmo produto são consolidados antes da baixa.
+- O preço de cada item é gravado no pedido (snapshot), então mudanças futuras de preço não alteram pedidos antigos.
 - Erros padronizados com Problem Details (RFC 9457).
+
+## Fluxo de criação de pedido
+
+```mermaid
+sequenceDiagram
+    participant C as Cliente
+    participant A as OrderController
+    participant S as OrderService
+    participant D as PostgreSQL
+    C->>A: POST /api/v1/orders
+    A->>S: place(command)
+    S->>D: BEGIN
+    loop cada item em ordem fixa de produto
+        S->>D: UPDATE stocks baixa condicional por saldo disponivel
+        alt nenhuma linha afetada
+            S->>D: ROLLBACK
+            S-->>C: 409 estoque insuficiente
+        end
+    end
+    S->>D: INSERT pedido e itens
+    S->>D: COMMIT
+    S-->>C: 201 pedido confirmado
+```
 
 ## Modelo de dados
 
 ```mermaid
 erDiagram
     PRODUCTS ||--|| STOCKS : possui
+    PRODUCTS ||--o{ ORDER_ITEMS : referenciado
+    ORDERS ||--|{ ORDER_ITEMS : contem
     PRODUCTS {
         uuid id PK
         varchar sku UK
@@ -90,6 +119,19 @@ erDiagram
         integer quantity
         timestamptz updated_at
     }
+    ORDERS {
+        uuid id PK
+        varchar status
+        numeric total_amount
+        timestamptz created_at
+    }
+    ORDER_ITEMS {
+        uuid id PK
+        uuid order_id FK
+        uuid product_id FK
+        integer quantity
+        numeric unit_price
+    }
 ```
 
 ## API
@@ -100,12 +142,14 @@ erDiagram
 | GET | `/api/v1/products` | Lista produtos com paginação (`page`, `size`) |
 | GET | `/api/v1/products/{id}` | Busca produto por id |
 | GET | `/api/v1/products/{id}/stock` | Consulta o estoque do produto |
-
+| POST | `/api/v1/products/{id}/stock/replenishments` | Repõe estoque de forma atômica |
+| POST | `/api/v1/orders` | Cria pedido e baixa o estoque na mesma transação |
+| GET | `/api/v1/orders/{id}` | Busca pedido com seus itens |
 ## Roadmap
 
 - [x] Fase 0: scaffold, Docker Compose, Flyway e CI
 - [x] Fase 1: modelo de domínio, migrations e endpoints básicos
-- [ ] Fase 2: baixa atômica e transação
+- [x] Fase 2: baixa atômica e transação
 - [ ] Fase 3: testes de concorrência com Testcontainers
 - [ ] Fase 4: idempotência, ledger de movimentações e erros padronizados
 - [ ] Fase 5: OpenAPI e refinamento da documentação
