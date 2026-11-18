@@ -4,6 +4,7 @@ import br.com.nevvesdev.inventory.application.command.PlaceOrderCommand;
 import br.com.nevvesdev.inventory.application.view.OrderView;
 import br.com.nevvesdev.inventory.domain.exception.OrderNotFoundException;
 import br.com.nevvesdev.inventory.domain.repository.OrderRepository;
+import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -11,6 +12,8 @@ import java.util.UUID;
 
 @Service
 public class OrderService {
+
+    public static final int MAX_ATTEMPTS = 10;
 
     private final OrderPlacer orderPlacer;
     private final OrderRepository orderRepository;
@@ -21,7 +24,17 @@ public class OrderService {
     }
 
     public OrderView place(PlaceOrderCommand command) {
-        return orderPlacer.place(command);
+        int attempt = 1;
+        while (true) {
+            try {
+                return orderPlacer.place(command);
+            } catch (OptimisticLockingFailureException ex) {
+                if (attempt >= MAX_ATTEMPTS) {
+                    throw ex;
+                }
+                attempt++;
+            }
+        }
     }
 
     @Transactional(readOnly = true)
