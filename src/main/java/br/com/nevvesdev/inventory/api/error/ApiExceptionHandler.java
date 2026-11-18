@@ -17,6 +17,7 @@ import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.context.request.WebRequest;
 import org.springframework.web.servlet.mvc.method.annotation.ResponseEntityExceptionHandler;
+import org.springframework.dao.OptimisticLockingFailureException;
 
 import java.util.List;
 
@@ -52,6 +53,17 @@ public class ApiExceptionHandler extends ResponseEntityExceptionHandler {
         problem.setTitle("Estoque insuficiente");
         problem.setProperty("productId", ex.getProductId());
         problem.setProperty("requestedQuantity", ex.getRequestedQuantity());
+        return problem;
+    }
+
+    @ExceptionHandler(OptimisticLockingFailureException.class)
+    public ProblemDetail handleOptimisticLockingFailure(OptimisticLockingFailureException ex) {
+        log.warn("Conflito de concorrência após esgotar as tentativas", ex);
+        ProblemDetail problem = ProblemDetail.forStatusAndDetail(
+                HttpStatus.CONFLICT,
+                "O recurso foi alterado por outra operação. Tente novamente."
+        );
+        problem.setTitle("Conflito de concorrência");
         return problem;
     }
 
