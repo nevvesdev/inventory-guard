@@ -1,5 +1,6 @@
 package br.com.nevvesdev.inventory.domain.model;
 
+import br.com.nevvesdev.inventory.domain.exception.InsufficientStockException;
 import org.junit.jupiter.api.Test;
 
 import java.util.UUID;
@@ -36,6 +37,42 @@ class StockTest {
     @Test
     void deveRejeitarProdutoNulo() {
         assertThatThrownBy(() -> Stock.create(null, 1))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void deveReduzirQuantidadeDisponivel() {
+        Stock stock = Stock.create(UUID.randomUUID(), 5);
+
+        stock.decrease(2);
+
+        assertThat(stock.getQuantity()).isEqualTo(3);
+    }
+
+    @Test
+    void devePermitirZerarOEstoque() {
+        Stock stock = Stock.create(UUID.randomUUID(), 1);
+
+        stock.decrease(1);
+
+        assertThat(stock.getQuantity()).isZero();
+    }
+
+    @Test
+    void deveRejeitarBaixaMaiorQueOSaldoSemAlterarQuantidade() {
+        Stock stock = Stock.create(UUID.randomUUID(), 1);
+
+        assertThatThrownBy(() -> stock.decrease(2))
+                .isInstanceOf(InsufficientStockException.class);
+
+        assertThat(stock.getQuantity()).isEqualTo(1);
+    }
+
+    @Test
+    void deveRejeitarBaixaComQuantidadeNaoPositiva() {
+        Stock stock = Stock.create(UUID.randomUUID(), 5);
+
+        assertThatThrownBy(() -> stock.decrease(0))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 }
