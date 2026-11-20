@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="640" viewBox="0 0 1280 640">
+    <defs>
+        <linearGradient id="fundo" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0%" stop-color="#0b1220"/>
+            <stop offset="100%" stop-color="#14233f"/>
+        </linearGradient>
+    </defs>
+    <rect width="1280" height="640" fill="url(#fundo)"/>
+    <rect x="80" y="92" width="8" height="150" rx="4" fill="#38bdf8"/>
+    <text x="112" y="162" font-family="Helvetica, Arial, sans-serif" font-size="86" font-weight="700" fill="#f8fafc">inventory-guard</text>
+    <text x="112" y="226" font-family="Helvetica, Arial, sans-serif" font-size="36" fill="#94a3b8">Estoque que não vende o que não tem.</text>
+    <text x="112" y="334" font-family="Helvetica, Arial, sans-serif" font-size="34" fill="#e2e8f0">• Baixa atômica no banco de dados</text>
+    <text x="112" y="392" font-family="Helvetica, Arial, sans-serif" font-size="34" fill="#e2e8f0">• Idempotência: retry não duplica pedido</text>
+    <text x="112" y="450" font-family="Helvetica, Arial, sans-serif" font-size="34" fill="#e2e8f0">• Histórico imutável, protegido por trigger</text>
+    <rect x="112" y="508" width="140" height="60" rx="30" fill="#1e3a5f"/>
+    <text x="182" y="548" font-family="Helvetica, Arial, sans-serif" font-size="26" fill="#7dd3fc" text-anchor="middle">Java 21</text>
+    <rect x="272" y="508" width="200" height="60" rx="30" fill="#1e3a5f"/>
+    <text x="372" y="548" font-family="Helvetica, Arial, sans-serif" font-size="26" fill="#7dd3fc" text-anchor="middle">Spring Boot 4</text>
+    <rect x="492" y="508" width="190" height="60" rx="30" fill="#1e3a5f"/>
+    <text x="587" y="548" font-family="Helvetica, Arial, sans-serif" font-size="26" fill="#7dd3fc" text-anchor="middle">PostgreSQL</text>
+    <rect x="702" y="508" width="230" height="60" rx="30" fill="#1e3a5f"/>
+    <text x="817" y="548" font-family="Helvetica, Arial, sans-serif" font-size="26" fill="#7dd3fc" text-anchor="middle">Testcontainers</text>
+    <rect x="952" y="508" width="150" height="60" rx="30" fill="#1e3a5f"/>
+    <text x="1027" y="548" font-family="Helvetica, Arial, sans-serif" font-size="26" fill="#7dd3fc" text-anchor="middle">Docker</text>
+</svg>
