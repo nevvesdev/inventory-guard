@@ -2,6 +2,7 @@ package br.com.nevvesdev.inventory.application.service;
 
 import br.com.nevvesdev.inventory.application.command.PlaceOrderCommand;
 import br.com.nevvesdev.inventory.application.view.OrderView;
+import br.com.nevvesdev.inventory.application.view.PlacedOrder;
 import br.com.nevvesdev.inventory.domain.exception.OrderNotFoundException;
 import br.com.nevvesdev.inventory.domain.repository.OrderRepository;
 import org.springframework.dao.OptimisticLockingFailureException;
@@ -24,10 +25,14 @@ public class OrderService {
     }
 
     public OrderView place(PlaceOrderCommand command) {
+        return place(command, null).order();
+    }
+
+    public PlacedOrder place(PlaceOrderCommand command, String idempotencyKey) {
         int attempt = 1;
         while (true) {
             try {
-                return orderPlacer.place(command);
+                return orderPlacer.place(command, idempotencyKey);
             } catch (OptimisticLockingFailureException ex) {
                 if (attempt >= MAX_ATTEMPTS) {
                     throw ex;

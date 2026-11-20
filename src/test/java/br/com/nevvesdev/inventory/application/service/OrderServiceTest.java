@@ -3,6 +3,8 @@ package br.com.nevvesdev.inventory.application.service;
 import br.com.nevvesdev.inventory.application.command.PlaceOrderCommand;
 import br.com.nevvesdev.inventory.application.command.PlaceOrderItem;
 import br.com.nevvesdev.inventory.application.view.OrderView;
+import br.com.nevvesdev.inventory.application.view.PlacedOrder;
+import br.com.nevvesdev.inventory.domain.exception.IdempotencyKeyReuseException;
 import br.com.nevvesdev.inventory.domain.exception.InsufficientStockException;
 import br.com.nevvesdev.inventory.domain.exception.OrderNotFoundException;
 import br.com.nevvesdev.inventory.domain.model.OrderStatus;
@@ -29,6 +31,8 @@ import static org.mockito.Mockito.when;
 @ExtendWith(MockitoExtension.class)
 class OrderServiceTest {
 
+    private static final String KEY = "chave-de-teste-0001";
+
     @Mock
     private OrderPlacer orderPlacer;
 
@@ -39,51 +43,74 @@ class OrderServiceTest {
     private OrderService orderService;
 
     @Test
-    void deveDelegarCriacaoDoPedidoSemRetentativaQuandoHaSucesso() {
+    void deveCriarPedidoSemChaveDelegandoAoOrderPlacer() {
         PlaceOrderCommand command = comando();
         OrderView esperado = pedidoConfirmado();
-        when(orderPlacer.place(command)).thenReturn(esperado);
+        when(orderPlacer.place(command, null)).thenReturn(new PlacedOrder(esperado, false));
 
         OrderView resultado = orderService.place(command);
 
         assertThat(resultado).isEqualTo(esperado);
-        verify(orderPlacer, times(1)).place(command);
+        verify(orderPlacer, times(1)).place(command, null);
+    }
+
+    @Test
+    void devePropagarOIndicadorDeReplayDaChaveDeIdempotencia() {
+        PlaceOrderCommand command = comando();
+        PlacedOrder esperado = new PlacedOrder(pedidoConfirmado(), true);
+        when(orderPlacer.place(command, KEY)).thenReturn(esperado);
+
+        PlacedOrder resultado = orderService.place(command, KEY);
+
+        assertThat(resultado.replayed()).isTrue();
+        assertThat(resultado).isEqualTo(esperado);
     }
 
     @Test
     void deveRepetirPedidoQuandoHaConflitoDeLockOtimista() {
         PlaceOrderCommand command = comando();
-        OrderView esperado = pedidoConfirmado();
-        when(orderPlacer.place(command))
+        PlacedOrder esperado = new PlacedOrder(pedidoConfirmado(), false);
+        when(orderPlacer.place(command, KEY))
                 .thenThrow(new OptimisticLockingFailureException("conflito"))
                 .thenReturn(esperado);
 
-        OrderView resultado = orderService.place(command);
+        PlacedOrder resultado = orderService.place(command, KEY);
 
         assertThat(resultado).isEqualTo(esperado);
-        verify(orderPlacer, times(2)).place(command);
+        verify(orderPlacer, times(2)).place(command, KEY);
     }
 
     @Test
     void deveDesistirAoEsgotarAsTentativas() {
         PlaceOrderCommand command = comando();
-        when(orderPlacer.place(command)).thenThrow(new OptimisticLockingFailureException("conflito"));
+        when(orderPlacer.place(command, KEY)).thenThrow(new OptimisticLockingFailureException("conflito"));
 
-        assertThatThrownBy(() -> orderService.place(command))
+        assertThatThrownBy(() -> orderService.place(command, KEY))
                 .isInstanceOf(OptimisticLockingFailureException.class);
 
-        verify(orderPlacer, times(OrderService.MAX_ATTEMPTS)).place(command);
+        verify(orderPlacer, times(OrderService.MAX_ATTEMPTS)).place(command, KEY);
     }
 
     @Test
     void naoDeveRepetirQuandoOEstoqueEInsuficiente() {
         PlaceOrderCommand command = comando();
-        when(orderPlacer.place(command)).thenThrow(new InsufficientStockException(UUID.randomUUID(), 1));
+        when(orderPlacer.place(command, KEY)).thenThrow(new InsufficientStockException(UUID.randomUUID(), 1));
 
-        assertThatThrownBy(() -> orderService.place(command))
+        assertThatThrownBy(() -> orderService.place(command, KEY))
                 .isInstanceOf(InsufficientStockException.class);
 
-        verify(orderPlacer, times(1)).place(command);
+        verify(orderPlacer, times(1)).place(command, KEY);
+    }
+
+    @Test
+    void naoDeveRepetirQuandoAChaveEReutilizadaComOutroConteudo() {
+        PlaceOrderCommand command = comando();
+        when(orderPlacer.place(command, KEY)).thenThrow(new IdempotencyKeyReuseException(KEY));
+
+        assertThatThrownBy(() -> orderService.place(command, KEY))
+                .isInstanceOf(IdempotencyKeyReuseException.class);
+
+        verify(orderPlacer, times(1)).place(command, KEY);
     }
 
     @Test

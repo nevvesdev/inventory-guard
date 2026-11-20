@@ -4,17 +4,27 @@ import br.com.nevvesdev.inventory.application.command.PlaceOrderCommand;
 import br.com.nevvesdev.inventory.application.command.PlaceOrderItem;
 import br.com.nevvesdev.inventory.application.port.StockReservation;
 import br.com.nevvesdev.inventory.application.view.OrderView;
+import br.com.nevvesdev.inventory.application.view.PlacedOrder;
+import br.com.nevvesdev.inventory.domain.exception.IdempotencyKeyReuseException;
 import br.com.nevvesdev.inventory.domain.exception.ProductNotFoundException;
+import br.com.nevvesdev.inventory.domain.model.IdempotencyKey;
 import br.com.nevvesdev.inventory.domain.model.Order;
 import br.com.nevvesdev.inventory.domain.model.OrderLine;
 import br.com.nevvesdev.inventory.domain.model.Product;
+import br.com.nevvesdev.inventory.domain.repository.IdempotencyKeyRepository;
 import br.com.nevvesdev.inventory.domain.repository.OrderRepository;
 import br.com.nevvesdev.inventory.domain.repository.ProductRepository;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
+import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -29,22 +39,47 @@ public class OrderPlacer {
     private final StockReservation stockReservation;
     private final OrderRepository orderRepository;
     private final StockLedger stockLedger;
+    private final IdempotencyKeyRepository idempotencyKeyRepository;
 
     public OrderPlacer(
             ProductRepository productRepository,
             StockReservation stockReservation,
             OrderRepository orderRepository,
-            StockLedger stockLedger
+            StockLedger stockLedger,
+            IdempotencyKeyRepository idempotencyKeyRepository
     ) {
         this.productRepository = productRepository;
         this.stockReservation = stockReservation;
         this.orderRepository = orderRepository;
         this.stockLedger = stockLedger;
+        this.idempotencyKeyRepository = idempotencyKeyRepository;
     }
 
     @Transactional
-    public OrderView place(PlaceOrderCommand command) {
+    public PlacedOrder place(PlaceOrderCommand command, String idempotencyKey) {
         Map<UUID, Integer> requested = consolidate(command.items());
+
+        if (idempotencyKey == null) {
+            return new PlacedOrder(createOrder(requested), false);
+        }
+
+        String fingerprint = fingerprint(requested);
+        int claimed = idempotencyKeyRepository.insertIfAbsent(
+                idempotencyKey,
+                fingerprint,
+                Instant.now().truncatedTo(ChronoUnit.MICROS)
+        );
+
+        if (claimed == 0) {
+            return new PlacedOrder(replay(idempotencyKey, fingerprint), true);
+        }
+
+        OrderView created = createOrder(requested);
+        idempotencyKeyRepository.attachOrder(idempotencyKey, created.id());
+        return new PlacedOrder(created, false);
+    }
+
+    private OrderView createOrder(Map<UUID, Integer> requested) {
         Map<UUID, BigDecimal> prices = loadPrices(requested.keySet());
 
         List<OrderLine> lines = new ArrayList<>();
@@ -60,6 +95,19 @@ public class OrderPlacer {
         Order saved = orderRepository.save(Order.place(lines));
         stockLedger.recordSales(saved.getId(), lines);
         return OrderView.from(saved);
+    }
+
+    private OrderView replay(String idempotencyKey, String fingerprint) {
+        IdempotencyKey stored = idempotencyKeyRepository.findById(idempotencyKey)
+                .orElseThrow(() -> new IllegalStateException("Chave de idempotência não encontrada: " + idempotencyKey));
+
+        if (!stored.getRequestHash().equals(fingerprint)) {
+            throw new IdempotencyKeyReuseException(idempotencyKey);
+        }
+
+        return orderRepository.findWithItemsById(stored.getOrderId())
+                .map(OrderView::from)
+                .orElseThrow(() -> new IllegalStateException("Pedido da chave não encontrado: " + idempotencyKey));
     }
 
     private Map<UUID, Integer> consolidate(List<PlaceOrderItem> items) {
@@ -81,5 +129,18 @@ public class OrderPlacer {
         }
 
         return prices;
+    }
+
+    private String fingerprint(Map<UUID, Integer> requested) {
+        String canonical = requested.entrySet().stream()
+                .map(entry -> entry.getKey() + ":" + entry.getValue())
+                .collect(Collectors.joining(";"));
+
+        try {
+            byte[] digest = MessageDigest.getInstance("SHA-256").digest(canonical.getBytes(StandardCharsets.UTF_8));
+            return HexFormat.of().formatHex(digest);
+        } catch (NoSuchAlgorithmException ex) {
+            throw new IllegalStateException("SHA-256 indisponível", ex);
+        }
     }
 }
