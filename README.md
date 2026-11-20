@@ -1,13 +1,15 @@
 # Inventory Guard
 
 ![CI](https://github.com/nevvesdev/inventory-guard/actions/workflows/ci.yml/badge.svg)
+![License](https://img.shields.io/badge/license-MIT-blue)
 
-Sistema de gestão de estoque que garante consistência sob concorrência.
+Sistema de gestão de estoque que **não vende o que não tem**, mesmo sob concorrência.
 
 ## O problema
 
-Existe um único iPhone em estoque. Duas pessoas tentam comprá-lo ao mesmo tempo. Se ambas leem "1 disponível" antes de qualquer baixa, o sistema vende duas unidades e entrega uma. Nenhum erro de sintaxe, nenhuma exceção: o software simplesmente falhou.
+Existe um único iPhone em estoque. Duas pessoas tentam comprá-lo ao mesmo tempo. Se ambas leem "1 disponível" antes de qualquer baixa, o sistema vende duas unidades e só pode entregar uma. Não há erro de sintaxe nem exceção: o software simplesmente falha em silêncio.
 
+Este projeto resolve esse problema e **prova a solução com testes automatizados** contra um PostgreSQL real.
 ## O que este projeto demonstra
 
 - Baixa atômica de estoque no banco de dados
@@ -16,6 +18,9 @@ Existe um único iPhone em estoque. Duas pessoas tentam comprá-lo ao mesmo temp
 - Teste automatizado simulando compras simultâneas contra PostgreSQL real
 - Idempotência na criação de pedidos
 - Histórico imutável de movimentações de estoque
+- **Sem deadlock:** itens processados em ordem fixa de produto
+- **Ambiente reproduzível:** Docker Compose, Flyway, Testcontainers e CI no GitHub Actions
+- **API documentada** com OpenAPI e Swagger UI
 
 ## Stack
 
@@ -27,7 +32,21 @@ Existe um único iPhone em estoque. Duas pessoas tentam comprá-lo ao mesmo temp
 - GitHub Actions
 - JUnit 5 e Testcontainers
 
-## Como executar
+## Execução rápida
+
+Pré-requisito: Docker.
+
+```bash
+docker compose --profile app up --build
+```
+
+Depois de subir:
+
+- Swagger UI: http://localhost:8080/swagger-ui/index.html
+- Especificação OpenAPI: http://localhost:8080/v3/api-docs
+- Health check: http://localhost:8080/actuator/health
+
+### Desenvolvimento local
 
 Pré-requisitos: JDK 21 e Docker.
 
@@ -36,66 +55,45 @@ docker compose up -d
 ./mvnw spring-boot:run
 ```
 
-Health check: `http://localhost:8080/actuator/health`
+### Configuração
 
-## Testes
-
-Os testes de integração usam Testcontainers: basta ter o Docker em execução, sem subir nada manualmente.
-
-```bash
-./mvnw verify
-```
+| Variável | Padrão | Descrição |
+|---|---|---|
+| `DB_URL` | `jdbc:postgresql://localhost:5432/inventory_guard` | URL do banco |
+| `DB_USERNAME` | `inventory` | Usuário do banco |
+| `DB_PASSWORD` | `inventory` | Senha do banco |
+| `STOCK_STRATEGY` | `conditional-update` | `conditional-update`, `pessimistic-lock` ou `optimistic-lock` |
+| `SERVER_PORT` | `8080` | Porta da aplicação |
 
 ## Controle de concorrência
 
-A reserva de estoque é feita por uma de três estratégias, escolhida pela propriedade `inventory.stock.strategy` (variável de ambiente `STOCK_STRATEGY`):
+A reserva de estoque usa uma de três estratégias, escolhida em `STOCK_STRATEGY`:
 
-| Estratégia | Valor | Como funciona | Observações |
-|---|---|---|---|
-| Update condicional | `conditional-update` (padrão) | `UPDATE ... WHERE quantity >= :n`; o banco decide | Sem lock explícito, simples e rápido |
-| Lock pessimista | `pessimistic-lock` | `SELECT ... FOR UPDATE` e depois decrementa | Concorrentes esperam na fila da linha |
-| Lock otimista | `optimistic-lock` | Coluna `version` e retentativa do pedido | Sob muita disputa, algumas tentativas se repetem |
+| Estratégia | Como funciona | Observações |
+|---|---|---|
+| `conditional-update` (padrão) | `UPDATE ... WHERE quantity >= :n`; o banco decide | Sem lock explícito, simples e rápido |
+| `pessimistic-lock` | `SELECT ... FOR UPDATE` e depois decrementa | Concorrentes esperam na fila da linha |
+| `optimistic-lock` | Coluna `version` e retentativa do pedido | Sob muita disputa, algumas tentativas se repetem |
 
-## Idempotência na criação de pedidos
+Em todas, a baixa de estoque e o registro do pedido acontecem na mesma transação. Pedidos que citam os mesmos produtos em ordens opostas não geram deadlock, porque os itens são sempre processados em ordem fixa.
 
-`POST /api/v1/orders` aceita o header opcional `Idempotency-Key`. Um retry (por queda de rede, por exemplo) com a mesma chave não cria um segundo pedido nem baixa o estoque de novo.
+## Idempotência
+
+`POST /api/v1/orders` aceita o header opcional `Idempotency-Key`.
 
 | Situação | Resposta |
 |---|---|
 | Chave nova | `201` com o pedido criado |
-| Mesma chave e mesmo conteúdo | `200` com o pedido original e o header `Idempotency-Replayed: true` |
+| Mesma chave e mesmo conteúdo | `200` com o pedido original e `Idempotency-Replayed: true` |
 | Mesma chave com conteúdo diferente | `422` |
 | Chave mal formada | `400` |
 | Pedido falhou (ex.: estoque insuficiente) | A chave não é consumida; um novo envio pode tentar de novo |
 
-```mermaid
-sequenceDiagram
-    participant C as Cliente
-    participant S as OrderService
-    participant D as PostgreSQL
-    C->>S: POST /orders com Idempotency-Key
-    S->>D: BEGIN
-    S->>D: INSERT da chave com ON CONFLICT DO NOTHING
-    alt chave nova
-        S->>D: baixa estoque, grava pedido e vendas, vincula a chave
-        S->>D: COMMIT
-        S-->>C: 201 pedido criado
-    else chave já existe
-        S->>D: busca o pedido original
-        S->>D: COMMIT
-        S-->>C: 200 mesmo pedido com Idempotency-Replayed true
-    end
-```
+A chave é reservada com `INSERT ... ON CONFLICT DO NOTHING` antes de qualquer baixa de estoque, na mesma transação do pedido. Duas requisições simultâneas com a mesma chave não duplicam o pedido: a segunda espera a primeira terminar e recebe o resultado dela.
 
-A reserva da chave acontece antes de qualquer baixa de estoque, dentro da mesma transação do pedido. Se duas requisições com a mesma chave chegam juntas, o PostgreSQL faz a segunda esperar a primeira terminar, e ela passa a receber o pedido original.
+## Histórico de movimentações
 
-## Histórico de movimentações de estoque
-
-Toda mudança de estoque gera uma linha imutável em `stock_movements`: estoque inicial, reposição ou venda (com o pedido de origem). A soma das movimentações de um produto é sempre igual ao saldo atual.
-
-A imutabilidade tem duas barreiras: o repositório só expõe inserção e consulta, e um trigger no PostgreSQL rejeita `UPDATE` e `DELETE`.
-
-Em todas, a baixa de estoque e o registro do pedido acontecem na mesma transação, e os itens são processados em ordem fixa de produto para evitar deadlock.
+Toda mudança de estoque gera uma linha imutável em `stock_movements` (estoque inicial, reposição ou venda). A soma das movimentações de um produto é sempre igual ao saldo atual. A imutabilidade tem duas barreiras: o repositório só expõe inserção e consulta, e um trigger no PostgreSQL rejeita `UPDATE` e `DELETE`.
 
 ### Testes de concorrência
 
@@ -118,48 +116,36 @@ flowchart TD
     Cliente[Cliente HTTP] --> API[api: controllers, DTOs e tratamento de erros]
     API --> APP[application: casos de uso e transações]
     APP --> DOM[domain: entidades, regras e repositórios]
+    INF[infrastructure: estratégias de estoque e configuração] --> APP
     DOM --> DB[(PostgreSQL)]
 ```
 
 ```
 br.com.nevvesdev.inventory
-├── api            controllers, DTOs e tratamento de erros
-├── application    casos de uso e orquestração transacional
-└── domain         entidades, regras de negócio e repositórios
+├── api              controllers, DTOs, documentação OpenAPI e tratamento de erros
+├── application      casos de uso, portas e orquestração transacional
+├── domain           entidades, regras de negócio, exceções e repositórios
+└── infrastructure   estratégias de reserva de estoque e configuração
 ```
-
-### Decisões
-
-- Estoque separado do produto: o registro mais disputado do sistema fica isolado.
-- O banco é a última linha de defesa: `CHECK (quantity >= 0)`, `UNIQUE (sku)` e chaves estrangeiras.
-- A baixa de estoque é um `UPDATE` condicional atômico: o banco decide se há saldo, sem ler e decidir na aplicação.
-- Pedido e baixa de estoque ocorrem na mesma transação: se qualquer item falha, nada é gravado.
-- Itens do pedido são processados em ordem fixa de produto, o que evita deadlock entre pedidos concorrentes.
-- Itens repetidos do mesmo produto são consolidados antes da baixa.
-- O preço de cada item é gravado no pedido (snapshot), então mudanças futuras de preço não alteram pedidos antigos.
-- Erros padronizados com Problem Details (RFC 9457).
-- Chaves de idempotência são reservadas antes do trabalho, na mesma transação do pedido.
-- O histórico de movimentações é append-only e imutável também no banco, por trigger.
 
 ## Fluxo de criação de pedido
 
 ```mermaid
 sequenceDiagram
     participant C as Cliente
-    participant A as OrderController
     participant S as OrderService
     participant D as PostgreSQL
-    C->>A: POST /api/v1/orders
-    A->>S: place(command)
+    C->>S: POST /orders com Idempotency-Key opcional
     S->>D: BEGIN
+    S->>D: reserva a chave de idempotência
     loop cada item em ordem fixa de produto
-        S->>D: UPDATE stocks baixa condicional por saldo disponivel
-        alt nenhuma linha afetada
+        S->>D: reserva de estoque pela estratégia configurada
+        alt sem saldo
             S->>D: ROLLBACK
             S-->>C: 409 estoque insuficiente
         end
     end
-    S->>D: INSERT pedido e itens
+    S->>D: grava pedido, itens e movimentações de venda
     S->>D: COMMIT
     S-->>C: 201 pedido confirmado
 ```
@@ -168,9 +154,40 @@ sequenceDiagram
 
 ```mermaid
 erDiagram
+    PRODUCTS ||--|| STOCKS : possui
+    PRODUCTS ||--o{ ORDER_ITEMS : referenciado
     PRODUCTS ||--o{ STOCK_MOVEMENTS : movimenta
+    ORDERS ||--|{ ORDER_ITEMS : contem
     ORDERS ||--o{ STOCK_MOVEMENTS : origina
     ORDERS ||--o| IDEMPOTENCY_KEYS : identifica
+    PRODUCTS {
+        uuid id PK
+        varchar sku UK
+        varchar name
+        numeric price
+        timestamptz created_at
+        timestamptz updated_at
+    }
+    STOCKS {
+        uuid id PK
+        uuid product_id FK
+        integer quantity
+        bigint version
+        timestamptz updated_at
+    }
+    ORDERS {
+        uuid id PK
+        varchar status
+        numeric total_amount
+        timestamptz created_at
+    }
+    ORDER_ITEMS {
+        uuid id PK
+        uuid order_id FK
+        uuid product_id FK
+        integer quantity
+        numeric unit_price
+    }
     STOCK_MOVEMENTS {
         uuid id PK
         uuid product_id FK
@@ -189,17 +206,59 @@ erDiagram
 
 ## API
 
+A documentação interativa está no Swagger UI. Resumo:
+
 | Método | Rota | Descrição |
 |---|---|---|
 | POST | `/api/v1/products` | Cria produto com estoque inicial |
-| GET | `/api/v1/products` | Lista produtos com paginação (`page`, `size`) |
+| GET | `/api/v1/products` | Lista produtos com paginação |
 | GET | `/api/v1/products/{id}` | Busca produto por id |
-| GET | `/api/v1/products/{id}/stock` | Consulta o estoque do produto |
+| GET | `/api/v1/products/{id}/stock` | Consulta o saldo de estoque |
 | POST | `/api/v1/products/{id}/stock/replenishments` | Repõe estoque de forma atômica |
-| POST | `/api/v1/orders` | Cria pedido e baixa o estoque na mesma transação |
+| GET | `/api/v1/products/{id}/stock/movements` | Histórico de movimentações |
+| POST | `/api/v1/orders` | Cria pedido e baixa o estoque (aceita `Idempotency-Key`) |
 | GET | `/api/v1/orders/{id}` | Busca pedido com seus itens |
-| POST | `/api/v1/orders` | Cria pedido e baixa o estoque na mesma transação (aceita `Idempotency-Key`) |
-| GET | `/api/v1/products/{id}/stock/movements` | Lista o histórico de movimentações do estoque, da mais recente para a mais antiga |
+
+Erros seguem o padrão Problem Details (RFC 9457).
+
+## Testes
+
+Os testes de integração usam Testcontainers: basta ter o Docker em execução.
+
+```bash
+./mvnw verify
+```
+
+| Camada | O que cobre |
+|---|---|
+| Unitários | Entidades, casos de uso e estratégias de reserva, com Mockito |
+| API | Endpoints, validação e erros, com MockMvc e PostgreSQL real |
+| Concorrência | Os cenários abaixo, rodando contra as três estratégias |
+| Banco | Imutabilidade do histórico (trigger) e rollback transacional |
+| Contrato | A especificação OpenAPI expõe todos os endpoints |
+
+Cenários de concorrência (PostgreSQL real, mesmas verificações nas três estratégias):
+
+- 20 compras simultâneas de um produto com 1 unidade: exatamente 1 sucesso
+- 30 compras simultâneas de um produto com 5 unidades: exatamente 5 sucessos
+- Pedidos com os mesmos produtos em ordens opostas: nenhum deadlock
+- 15 requisições simultâneas com a mesma chave de idempotência: 1 pedido, 14 repetições
+- O histórico de movimentações reconcilia com o saldo após a disputa
+
+```bash
+./mvnw test -Dtest='*StockConcurrencyTest'
+```
+
+## Decisões e trade-offs
+
+- **Estoque separado do produto:** o registro mais disputado fica isolado, o que facilita aplicar lock e update condicional nele.
+- **O banco é a última linha de defesa:** `CHECK (quantity >= 0)`, `UNIQUE (sku)` e chaves estrangeiras impedem estados inválidos mesmo se a aplicação errar.
+- **Update condicional como padrão:** é a estratégia mais simples e não exige retentativa. As outras duas existem para comparar custos e comportamento.
+- **Lock otimista exige retentativa fora da transação:** por isso a colocação do pedido é separada em `OrderPlacer` (transacional) e `OrderService` (repete em caso de conflito).
+- **Chave de idempotência opcional:** preserva a compatibilidade da API. Torná-la obrigatória é uma mudança de uma linha.
+- **Falha não consome a chave de idempotência:** como tudo acontece na mesma transação, o rollback do pedido desfaz a chave também.
+- **Repositórios Spring Data na camada de domínio:** troca de pureza arquitetural por menos mapeamento e menos código. Se um dia for preciso, a separação é localizada.
+- **Preço gravado no item do pedido:** mudanças futuras de preço não alteram pedidos antigos.
 
 ## Roadmap
 
@@ -208,7 +267,7 @@ erDiagram
 - [x] Fase 2: baixa atômica e transação
 - [x] Fase 3: testes de concorrência com Testcontainers
 - [x] Fase 4: idempotência, ledger de movimentações e erros padronizados
-- [ ] Fase 5: OpenAPI e refinamento da documentação
+- [x] Fase 5: OpenAPI e refinamento da documentação
 - [ ] Opcional: reserva de estoque com expiração
 
 ## 👨‍💻 Desenvolvido por
