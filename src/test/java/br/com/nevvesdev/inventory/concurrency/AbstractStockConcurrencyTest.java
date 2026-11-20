@@ -12,6 +12,8 @@ import br.com.nevvesdev.inventory.domain.repository.OrderRepository;
 import br.com.nevvesdev.inventory.domain.repository.ProductRepository;
 import br.com.nevvesdev.inventory.domain.repository.StockRepository;
 import br.com.nevvesdev.inventory.support.IntegrationTest;
+import br.com.nevvesdev.inventory.support.DatabaseCleaner;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -60,14 +62,15 @@ abstract class AbstractStockConcurrencyTest {
     @Autowired
     private ProductRepository productRepository;
 
+    @Autowired
+    private JdbcTemplate jdbcTemplate;
+
     private final List<UUID> productIds = new ArrayList<>();
     private final List<UUID> orderIds = new ArrayList<>();
 
     @AfterEach
     void limparDadosCriados() {
-        orderRepository.deleteAllById(orderIds);
-        stockRepository.deleteAll(stockRepository.findByProductIdIn(productIds));
-        productRepository.deleteAllById(productIds);
+        DatabaseCleaner.clean(jdbcTemplate);
     }
 
     @Test
