@@ -28,15 +28,18 @@ public class OrderPlacer {
     private final ProductRepository productRepository;
     private final StockReservation stockReservation;
     private final OrderRepository orderRepository;
+    private final StockLedger stockLedger;
 
     public OrderPlacer(
             ProductRepository productRepository,
             StockReservation stockReservation,
-            OrderRepository orderRepository
+            OrderRepository orderRepository,
+            StockLedger stockLedger
     ) {
         this.productRepository = productRepository;
         this.stockReservation = stockReservation;
         this.orderRepository = orderRepository;
+        this.stockLedger = stockLedger;
     }
 
     @Transactional
@@ -55,6 +58,7 @@ public class OrderPlacer {
         }
 
         Order saved = orderRepository.save(Order.place(lines));
+        stockLedger.recordSales(saved.getId(), lines);
         return OrderView.from(saved);
     }
 

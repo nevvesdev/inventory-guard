@@ -43,6 +43,9 @@ class OrderPlacerTest {
     @Mock
     private OrderRepository orderRepository;
 
+    @Mock
+    private StockLedger stockLedger;
+
     @InjectMocks
     private OrderPlacer orderPlacer;
 
@@ -61,6 +64,8 @@ class OrderPlacerTest {
         assertThat(view.items().get(0).quantity()).isEqualTo(3);
         assertThat(view.totalAmount()).isEqualByComparingTo("300.00");
         verify(stockReservation).reserve(productId, 3);
+
+        verify(stockLedger).recordSales(any(), any());
     }
 
     @Test
