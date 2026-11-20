@@ -37,11 +37,14 @@ class ProductServiceTest {
     @Mock
     private StockRepository stockRepository;
 
+    @Mock
+    private StockLedger stockLedger;
+
     @InjectMocks
     private ProductService productService;
 
     @Test
-    void deveCriarProdutoComEstoqueInicial() {
+    void deveCriarProdutoComEstoqueInicialERegistrarNoLivroRazao() {
         UUID id = UUID.randomUUID();
         when(productRepository.existsBySku("IPHONE-15")).thenReturn(false);
         when(productRepository.saveAndFlush(any(Product.class))).thenAnswer(invocation -> {
@@ -62,6 +65,7 @@ class ProductServiceTest {
         verify(stockRepository).save(captor.capture());
         assertThat(captor.getValue().getProductId()).isEqualTo(id);
         assertThat(captor.getValue().getQuantity()).isEqualTo(3);
+        verify(stockLedger).recordInitialStock(id, 3);
     }
 
     @Test
@@ -74,6 +78,7 @@ class ProductServiceTest {
 
         verify(productRepository, never()).saveAndFlush(any());
         verifyNoInteractions(stockRepository);
+        verifyNoInteractions(stockLedger);
     }
 
     @Test

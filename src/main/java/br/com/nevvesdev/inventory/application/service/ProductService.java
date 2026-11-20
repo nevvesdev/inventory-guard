@@ -16,7 +16,6 @@ import org.springframework.transaction.annotation.Transactional;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
-import java.util.function.Function;
 import java.util.stream.Collectors;
 
 @Service
@@ -24,10 +23,16 @@ public class ProductService {
 
     private final ProductRepository productRepository;
     private final StockRepository stockRepository;
+    private final StockLedger stockLedger;
 
-    public ProductService(ProductRepository productRepository, StockRepository stockRepository) {
+    public ProductService(
+            ProductRepository productRepository,
+            StockRepository stockRepository,
+            StockLedger stockLedger
+    ) {
         this.productRepository = productRepository;
         this.stockRepository = stockRepository;
+        this.stockLedger = stockLedger;
     }
 
     @Transactional
@@ -40,6 +45,7 @@ public class ProductService {
 
         Product saved = productRepository.saveAndFlush(product);
         stockRepository.save(Stock.create(saved.getId(), command.initialQuantity()));
+        stockLedger.recordInitialStock(saved.getId(), command.initialQuantity());
 
         return ProductView.of(saved, command.initialQuantity());
     }

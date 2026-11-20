@@ -18,6 +18,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -25,6 +27,9 @@ class StockServiceTest {
 
     @Mock
     private StockRepository stockRepository;
+
+    @Mock
+    private StockLedger stockLedger;
 
     @InjectMocks
     private StockService stockService;
@@ -51,7 +56,7 @@ class StockServiceTest {
     }
 
     @Test
-    void deveReporEstoqueEDevolverSaldoAtualizado() {
+    void deveReporEstoqueRegistrarNoLivroRazaoEDevolverSaldoAtualizado() {
         UUID productId = UUID.randomUUID();
         when(stockRepository.increment(eq(productId), eq(5), any(Instant.class))).thenReturn(1);
         when(stockRepository.findByProductId(productId))
@@ -60,14 +65,17 @@ class StockServiceTest {
         StockView view = stockService.replenish(productId, 5);
 
         assertThat(view.quantity()).isEqualTo(8);
+        verify(stockLedger).recordReplenishment(productId, 5);
     }
 
     @Test
-    void deveFalharAoReporEstoqueDeProdutoInexistente() {
+    void deveFalharAoReporEstoqueDeProdutoInexistenteSemRegistrarMovimentacao() {
         UUID productId = UUID.randomUUID();
         when(stockRepository.increment(eq(productId), eq(5), any(Instant.class))).thenReturn(0);
 
         assertThatThrownBy(() -> stockService.replenish(productId, 5))
                 .isInstanceOf(ProductNotFoundException.class);
+
+        verifyNoInteractions(stockLedger);
     }
 }

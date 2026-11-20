@@ -14,9 +14,11 @@ import java.util.UUID;
 public class StockService {
 
     private final StockRepository stockRepository;
+    private final StockLedger stockLedger;
 
-    public StockService(StockRepository stockRepository) {
+    public StockService(StockRepository stockRepository, StockLedger stockLedger) {
         this.stockRepository = stockRepository;
+        this.stockLedger = stockLedger;
     }
 
     @Transactional(readOnly = true)
@@ -34,6 +36,8 @@ public class StockService {
         if (updated == 0) {
             throw new ProductNotFoundException(productId);
         }
+
+        stockLedger.recordReplenishment(productId, quantity);
 
         return getByProductId(productId);
     }
