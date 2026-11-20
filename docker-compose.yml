@@ -16,5 +16,20 @@ services:
       timeout: 5s
       retries: 10
 
+  app:
+    build: .
+    container_name: inventory-guard-app
+    profiles: ["app"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DB_URL: jdbc:postgresql://postgres:5432/inventory_guard
+      DB_USERNAME: inventory
+      DB_PASSWORD: inventory
+      STOCK_STRATEGY: conditional-update
+    ports:
+      - "8080:8080"
+
 volumes:
   inventory-guard-data:
