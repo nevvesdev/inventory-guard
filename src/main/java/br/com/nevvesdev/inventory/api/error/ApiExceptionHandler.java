@@ -4,6 +4,7 @@ import br.com.nevvesdev.inventory.domain.exception.DuplicateSkuException;
 import br.com.nevvesdev.inventory.domain.exception.InsufficientStockException;
 import br.com.nevvesdev.inventory.domain.exception.OrderNotFoundException;
 import br.com.nevvesdev.inventory.domain.exception.ProductNotFoundException;
+import br.com.nevvesdev.inventory.domain.exception.IdempotencyKeyReuseException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataIntegrityViolationException;
@@ -53,6 +54,20 @@ public class ApiExceptionHandler extends ResponseEntityExceptionHandler {
         problem.setTitle("Estoque insuficiente");
         problem.setProperty("productId", ex.getProductId());
         problem.setProperty("requestedQuantity", ex.getRequestedQuantity());
+        return problem;
+    }
+
+    @ExceptionHandler(IdempotencyKeyReuseException.class)
+    public ProblemDetail handleIdempotencyKeyReuse(IdempotencyKeyReuseException ex) {
+        ProblemDetail problem = ProblemDetail.forStatusAndDetail(HttpStatusCode.valueOf(422), ex.getMessage());
+        problem.setTitle("Chave de idempotência reutilizada");
+        return problem;
+    }
+
+    @ExceptionHandler(InvalidIdempotencyKeyException.class)
+    public ProblemDetail handleInvalidIdempotencyKey(InvalidIdempotencyKeyException ex) {
+        ProblemDetail problem = ProblemDetail.forStatusAndDetail(HttpStatus.BAD_REQUEST, ex.getMessage());
+        problem.setTitle("Chave de idempotência inválida");
         return problem;
     }
 
