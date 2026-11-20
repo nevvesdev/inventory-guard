@@ -26,3 +26,6 @@ jobs:
 
       - name: Build e testes
         run: ./mvnw -B verify
+
+      - name: Validar build da imagem Docker
+        run: docker build -t inventory-guard:ci .
