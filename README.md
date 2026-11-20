@@ -56,6 +56,45 @@ A reserva de estoque é feita por uma de três estratégias, escolhida pela prop
 | Lock pessimista | `pessimistic-lock` | `SELECT ... FOR UPDATE` e depois decrementa | Concorrentes esperam na fila da linha |
 | Lock otimista | `optimistic-lock` | Coluna `version` e retentativa do pedido | Sob muita disputa, algumas tentativas se repetem |
 
+## Idempotência na criação de pedidos
+
+`POST /api/v1/orders` aceita o header opcional `Idempotency-Key`. Um retry (por queda de rede, por exemplo) com a mesma chave não cria um segundo pedido nem baixa o estoque de novo.
+
+| Situação | Resposta |
+|---|---|
+| Chave nova | `201` com o pedido criado |
+| Mesma chave e mesmo conteúdo | `200` com o pedido original e o header `Idempotency-Replayed: true` |
+| Mesma chave com conteúdo diferente | `422` |
+| Chave mal formada | `400` |
+| Pedido falhou (ex.: estoque insuficiente) | A chave não é consumida; um novo envio pode tentar de novo |
+
+```mermaid
+sequenceDiagram
+    participant C as Cliente
+    participant S as OrderService
+    participant D as PostgreSQL
+    C->>S: POST /orders com Idempotency-Key
+    S->>D: BEGIN
+    S->>D: INSERT da chave com ON CONFLICT DO NOTHING
+    alt chave nova
+        S->>D: baixa estoque, grava pedido e vendas, vincula a chave
+        S->>D: COMMIT
+        S-->>C: 201 pedido criado
+    else chave já existe
+        S->>D: busca o pedido original
+        S->>D: COMMIT
+        S-->>C: 200 mesmo pedido com Idempotency-Replayed true
+    end
+```
+
+A reserva da chave acontece antes de qualquer baixa de estoque, dentro da mesma transação do pedido. Se duas requisições com a mesma chave chegam juntas, o PostgreSQL faz a segunda esperar a primeira terminar, e ela passa a receber o pedido original.
+
+## Histórico de movimentações de estoque
+
+Toda mudança de estoque gera uma linha imutável em `stock_movements`: estoque inicial, reposição ou venda (com o pedido de origem). A soma das movimentações de um produto é sempre igual ao saldo atual.
+
+A imutabilidade tem duas barreiras: o repositório só expõe inserção e consulta, e um trigger no PostgreSQL rejeita `UPDATE` e `DELETE`.
+
 Em todas, a baixa de estoque e o registro do pedido acontecem na mesma transação, e os itens são processados em ordem fixa de produto para evitar deadlock.
 
 ### Testes de concorrência
@@ -99,6 +138,8 @@ br.com.nevvesdev.inventory
 - Itens repetidos do mesmo produto são consolidados antes da baixa.
 - O preço de cada item é gravado no pedido (snapshot), então mudanças futuras de preço não alteram pedidos antigos.
 - Erros padronizados com Problem Details (RFC 9457).
+- Chaves de idempotência são reservadas antes do trabalho, na mesma transação do pedido.
+- O histórico de movimentações é append-only e imutável também no banco, por trigger.
 
 ## Fluxo de criação de pedido
 
@@ -127,35 +168,22 @@ sequenceDiagram
 
 ```mermaid
 erDiagram
-    PRODUCTS ||--|| STOCKS : possui
-    PRODUCTS ||--o{ ORDER_ITEMS : referenciado
-    ORDERS ||--|{ ORDER_ITEMS : contem
-    PRODUCTS {
-        uuid id PK
-        varchar sku UK
-        varchar name
-        numeric price
-        timestamptz created_at
-        timestamptz updated_at
-    }
-    STOCKS {
+    PRODUCTS ||--o{ STOCK_MOVEMENTS : movimenta
+    ORDERS ||--o{ STOCK_MOVEMENTS : origina
+    ORDERS ||--o| IDEMPOTENCY_KEYS : identifica
+    STOCK_MOVEMENTS {
         uuid id PK
         uuid product_id FK
-        integer quantity
-        timestamptz updated_at
-    }
-    ORDERS {
-        uuid id PK
-        varchar status
-        numeric total_amount
-        timestamptz created_at
-    }
-    ORDER_ITEMS {
-        uuid id PK
+        varchar type
+        integer quantity_delta
         uuid order_id FK
-        uuid product_id FK
-        integer quantity
-        numeric unit_price
+        timestamptz created_at
+    }
+    IDEMPOTENCY_KEYS {
+        varchar idempotency_key PK
+        varchar request_hash
+        uuid order_id FK
+        timestamptz created_at
     }
 ```
 
@@ -170,13 +198,16 @@ erDiagram
 | POST | `/api/v1/products/{id}/stock/replenishments` | Repõe estoque de forma atômica |
 | POST | `/api/v1/orders` | Cria pedido e baixa o estoque na mesma transação |
 | GET | `/api/v1/orders/{id}` | Busca pedido com seus itens |
+| POST | `/api/v1/orders` | Cria pedido e baixa o estoque na mesma transação (aceita `Idempotency-Key`) |
+| GET | `/api/v1/products/{id}/stock/movements` | Lista o histórico de movimentações do estoque, da mais recente para a mais antiga |
+
 ## Roadmap
 
 - [x] Fase 0: scaffold, Docker Compose, Flyway e CI
 - [x] Fase 1: modelo de domínio, migrations e endpoints básicos
 - [x] Fase 2: baixa atômica e transação
 - [x] Fase 3: testes de concorrência com Testcontainers
-- [ ] Fase 4: idempotência, ledger de movimentações e erros padronizados
+- [x] Fase 4: idempotência, ledger de movimentações e erros padronizados
 - [ ] Fase 5: OpenAPI e refinamento da documentação
 - [ ] Opcional: reserva de estoque com expiração
 
