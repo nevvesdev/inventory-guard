@@ -16,8 +16,10 @@ spring:
   flyway:
     enabled: true
     locations: classpath:db/migration
+
 server:
   port: ${SERVER_PORT:8080}
+
 management:
   endpoints:
     web:
@@ -26,6 +28,14 @@ management:
   endpoint:
     health:
       show-details: when-authorized
+
 inventory:
   stock:
     strategy: ${STOCK_STRATEGY:conditional-update}
+
+springdoc:
+  override-with-generic-response: false
+  swagger-ui:
+    tags-sorter: alpha
+    operations-sorter: method
+    display-request-duration: true
