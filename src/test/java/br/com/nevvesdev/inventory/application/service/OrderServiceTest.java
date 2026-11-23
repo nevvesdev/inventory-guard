@@ -2,6 +2,8 @@ package br.com.nevvesdev.inventory.application.service;
 
 import br.com.nevvesdev.inventory.application.command.PlaceOrderCommand;
 import br.com.nevvesdev.inventory.application.command.PlaceOrderItem;
+import br.com.nevvesdev.inventory.application.event.OrderPlacedEvent;
+import br.com.nevvesdev.inventory.application.port.OrderEventPublisher;
 import br.com.nevvesdev.inventory.application.view.OrderView;
 import br.com.nevvesdev.inventory.application.view.PlacedOrder;
 import br.com.nevvesdev.inventory.domain.exception.IdempotencyKeyReuseException;
@@ -24,6 +26,9 @@ import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.Mockito.any;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -39,6 +44,9 @@ class OrderServiceTest {
     @Mock
     private OrderRepository orderRepository;
 
+    @Mock
+    private OrderEventPublisher orderEventPublisher;
+
     @InjectMocks
     private OrderService orderService;
 
@@ -52,6 +60,7 @@ class OrderServiceTest {
 
         assertThat(resultado).isEqualTo(esperado);
         verify(orderPlacer, times(1)).place(command, null);
+        verify(orderEventPublisher).publishOrderPlaced(any(OrderPlacedEvent.class));
     }
 
     @Test
@@ -64,6 +73,21 @@ class OrderServiceTest {
 
         assertThat(resultado.replayed()).isTrue();
         assertThat(resultado).isEqualTo(esperado);
+        verify(orderEventPublisher, never()).publishOrderPlaced(any(OrderPlacedEvent.class));
+    }
+
+    @Test
+    void deveRetornarPedidoConfirmadoMesmoQuandoFalhaAoPublicarEvento() {
+        PlaceOrderCommand command = comando();
+        OrderView esperado = pedidoConfirmado();
+        when(orderPlacer.place(command, KEY)).thenReturn(new PlacedOrder(esperado, false));
+        doThrow(new IllegalStateException("SQS indisponível"))
+                .when(orderEventPublisher).publishOrderPlaced(any(OrderPlacedEvent.class));
+
+        PlacedOrder resultado = orderService.place(command, KEY);
+
+        assertThat(resultado.order()).isEqualTo(esperado);
+        verify(orderPlacer).place(command, KEY);
     }
 
     @Test
@@ -78,6 +102,7 @@ class OrderServiceTest {
 
         assertThat(resultado).isEqualTo(esperado);
         verify(orderPlacer, times(2)).place(command, KEY);
+        verify(orderEventPublisher, times(1)).publishOrderPlaced(any(OrderPlacedEvent.class));
     }
 
     @Test
