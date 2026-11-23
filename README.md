@@ -32,6 +32,12 @@ Este projeto resolve esse problema e **prova a solução com testes automatizado
 - GitHub Actions
 - JUnit 5 e Testcontainers
 
+## Demonstração
+
+![Swagger UI com os endpoints documentados](docs/images/swagger-ui.png)
+
+![Retry com a mesma chave devolve o mesmo pedido](docs/images/idempotency-replay.png)
+
 ## Execução rápida
 
 Pré-requisito: Docker.
