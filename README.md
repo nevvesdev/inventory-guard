@@ -64,6 +64,10 @@ docker compose up -d
 | `DB_PASSWORD` | `inventory` | Senha do banco |
 | `STOCK_STRATEGY` | `conditional-update` | `conditional-update`, `pessimistic-lock` ou `optimistic-lock` |
 | `SERVER_PORT` | `8080` | Porta da aplicação |
+| `AWS_SQS_ENDPOINT` | vazio | Endpoint SQS; vazio usa o endpoint padrão da AWS |
+| `AWS_REGION` | `us-east-1` | Região AWS usada pelo SQS |
+| `AWS_SQS_QUEUE_NAME` | `order-placed` | Nome da fila de eventos de pedido |
+| `AWS_SQS_CONSUMER_ENABLED` | `false` | Ativa o consumidor SQS quando `true` |
 
 ## Controle de concorrência
 
@@ -94,6 +98,17 @@ A chave é reservada com `INSERT ... ON CONFLICT DO NOTHING` antes de qualquer b
 ## Histórico de movimentações
 
 Toda mudança de estoque gera uma linha imutável em `stock_movements` (estoque inicial, reposição ou venda). A soma das movimentações de um produto é sempre igual ao saldo atual. A imutabilidade tem duas barreiras: o repositório só expõe inserção e consulta, e um trigger no PostgreSQL rejeita `UPDATE` e `DELETE`.
+
+## Evento OrderPlaced (SQS)
+
+Após `OrderPlacer.place` retornar com sucesso e concluir sua transação, `OrderService` publica um evento `OrderPlaced` na fila configurada. O evento contém somente identificadores e dados dos itens, sem entidades JPA. Replays de uma `Idempotency-Key` não publicam novamente, e pedidos rejeitados não publicam evento.
+
+O consumidor é opt-in: configure `AWS_SQS_CONSUMER_ENABLED=true` para ativar o long polling. Ele registra cada evento e o remove da fila somente após processá-lo.
+
+**Limitações provisórias desta etapa (sem Transactional Outbox):**
+
+- Se o pedido for confirmado no banco e o envio para SQS falhar, a aplicação registra o erro e ainda responde com o pedido confirmado. Se o cliente não receber essa resposta e repetir a requisição com a mesma `Idempotency-Key`, o sistema retorna o pedido original como replay e não tenta publicar o evento outra vez. Portanto, o evento pode se perder permanentemente; a Transactional Outbox é a solução planejada para fechar essa janela entre commit e publicação.
+- A deduplicação do consumidor usa um conjunto em memória: reiniciar a aplicação apaga os IDs processados e instâncias diferentes não compartilham esse conjunto. É provisória e não oferece deduplicação durável ou distribuída.
 
 ### Testes de concorrência
 
@@ -147,6 +162,7 @@ sequenceDiagram
     end
     S->>D: grava pedido, itens e movimentações de venda
     S->>D: COMMIT
+    S->>SQS: publica OrderPlaced (se não for replay)
     S-->>C: 201 pedido confirmado
 ```
 
