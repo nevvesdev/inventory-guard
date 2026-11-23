@@ -33,6 +33,14 @@ inventory:
   stock:
     strategy: ${STOCK_STRATEGY:conditional-update}
 
+aws:
+  sqs:
+    endpoint: ${AWS_SQS_ENDPOINT:}
+    region: ${AWS_REGION:us-east-1}
+    queue-name: ${AWS_SQS_QUEUE_NAME:order-placed}
+    consumer:
+      enabled: ${AWS_SQS_CONSUMER_ENABLED:false}
+
 springdoc:
   override-with-generic-response: false
   swagger-ui:
