@@ -10,6 +10,7 @@ Sistema de gestão de estoque que **não vende o que não tem**, mesmo sob conco
 Existe um único iPhone em estoque. Duas pessoas tentam comprá-lo ao mesmo tempo. Se ambas leem "1 disponível" antes de qualquer baixa, o sistema vende duas unidades e só pode entregar uma. Não há erro de sintaxe nem exceção: o software simplesmente falha em silêncio.
 
 Este projeto resolve esse problema e **prova a solução com testes automatizados** contra um PostgreSQL real.
+
 ## O que este projeto demonstra
 
 - Baixa atômica de estoque no banco de dados
@@ -18,6 +19,7 @@ Este projeto resolve esse problema e **prova a solução com testes automatizado
 - Teste automatizado simulando compras simultâneas contra PostgreSQL real
 - Idempotência na criação de pedidos
 - Histórico imutável de movimentações de estoque
+- Publicação de evento no Amazon SQS depois do commit, com consumidor e deduplicação
 - **Sem deadlock:** itens processados em ordem fixa de produto
 - **Ambiente reproduzível:** Docker Compose, Flyway, Testcontainers e CI no GitHub Actions
 - **API documentada** com OpenAPI e Swagger UI
@@ -28,9 +30,11 @@ Este projeto resolve esse problema e **prova a solução com testes automatizado
 - Spring Boot 4.0.9
 - PostgreSQL 16
 - Flyway
+- AWS SDK v2 (SQS)
 - Docker Compose
 - GitHub Actions
-- JUnit 5 e Testcontainers
+- JUnit 5, Mockito e Testcontainers
+- ElasticMQ 1.7.1 nos testes de mensageria (imagem `softwaremill/elasticmq-native`)
 
 ## Execução rápida
 
@@ -105,9 +109,9 @@ Após `OrderPlacer.place` retornar com sucesso e concluir sua transação, `Orde
 
 O consumidor é opt-in: configure `AWS_SQS_CONSUMER_ENABLED=true` para ativar o long polling. Ele registra cada evento e o remove da fila somente após processá-lo.
 
-**Limitações provisórias desta etapa (sem Transactional Outbox):**
+**Limitações conhecidas:**
 
-- Se o pedido for confirmado no banco e o envio para SQS falhar, a aplicação registra o erro e ainda responde com o pedido confirmado. Se o cliente não receber essa resposta e repetir a requisição com a mesma `Idempotency-Key`, o sistema retorna o pedido original como replay e não tenta publicar o evento outra vez. Portanto, o evento pode se perder permanentemente; a Transactional Outbox é a solução planejada para fechar essa janela entre commit e publicação.
+- Se o pedido for confirmado no banco e o envio para o SQS falhar, a aplicação registra o erro e ainda responde com o pedido confirmado. Se o cliente não receber essa resposta e repetir a requisição com a mesma `Idempotency-Key`, o sistema retorna o pedido original como replay e não tenta publicar o evento outra vez. Portanto, **o evento pode se perder permanentemente**. A Transactional Outbox é a solução planejada para fechar essa janela entre commit e publicação, mas não está implementada neste projeto.
 - A deduplicação do consumidor usa um conjunto em memória: reiniciar a aplicação apaga os IDs processados e instâncias diferentes não compartilham esse conjunto. É provisória e não oferece deduplicação durável ou distribuída.
 
 ### Testes de concorrência
@@ -129,18 +133,19 @@ Arquitetura em camadas, com dependências apontando sempre para o domínio.
 ```mermaid
 flowchart TD
     Cliente[Cliente HTTP] --> API[api: controllers, DTOs e tratamento de erros]
-    API --> APP[application: casos de uso e transações]
+    API --> APP[application: casos de uso, portas e transações]
     APP --> DOM[domain: entidades, regras e repositórios]
-    INF[infrastructure: estratégias de estoque e configuração] --> APP
+    INF[infrastructure: estratégias de estoque, configuração e adaptador SQS] --> APP
     DOM --> DB[(PostgreSQL)]
+    INF --> SQS[(Amazon SQS)]
 ```
 
 ```
 br.com.nevvesdev.inventory
 ├── api              controllers, DTOs, documentação OpenAPI e tratamento de erros
-├── application      casos de uso, portas e orquestração transacional
+├── application      casos de uso, portas (incluindo OrderEventPublisher) e orquestração transacional
 ├── domain           entidades, regras de negócio, exceções e repositórios
-└── infrastructure   estratégias de reserva de estoque e configuração
+└── infrastructure   estratégias de reserva de estoque, configuração e adaptador SQS
 ```
 
 ## Fluxo de criação de pedido
@@ -150,6 +155,7 @@ sequenceDiagram
     participant C as Cliente
     participant S as OrderService
     participant D as PostgreSQL
+    participant Q as SQS
     C->>S: POST /orders com Idempotency-Key opcional
     S->>D: BEGIN
     S->>D: reserva a chave de idempotência
@@ -162,7 +168,7 @@ sequenceDiagram
     end
     S->>D: grava pedido, itens e movimentações de venda
     S->>D: COMMIT
-    S->>SQS: publica OrderPlaced (se não for replay)
+    S->>Q: publica OrderPlaced (se não for replay)
     S-->>C: 201 pedido confirmado
 ```
 
@@ -251,6 +257,7 @@ Os testes de integração usam Testcontainers: basta ter o Docker em execução.
 | API | Endpoints, validação e erros, com MockMvc e PostgreSQL real |
 | Concorrência | Os cenários abaixo, rodando contra as três estratégias |
 | Banco | Imutabilidade do histórico (trigger) e rollback transacional |
+| Mensageria | Publicação após o commit, ausência de publicação em pedido rejeitado e consumo com deduplicação, com ElasticMQ |
 | Contrato | A especificação OpenAPI expõe todos os endpoints |
 
 Cenários de concorrência (PostgreSQL real, mesmas verificações nas três estratégias):
@@ -275,6 +282,8 @@ Cenários de concorrência (PostgreSQL real, mesmas verificações nas três est
 - **Falha não consome a chave de idempotência:** como tudo acontece na mesma transação, o rollback do pedido desfaz a chave também.
 - **Repositórios Spring Data na camada de domínio:** troca de pureza arquitetural por menos mapeamento e menos código. Se um dia for preciso, a separação é localizada.
 - **Preço gravado no item do pedido:** mudanças futuras de preço não alteram pedidos antigos.
+- **Publicação depois do commit:** publicar dentro da transação poderia anunciar um pedido que sofre rollback. A publicação fica fora da transação e fora da retentativa do lock otimista, para acontecer uma única vez por pedido confirmado. O custo é a janela de perda descrita em Limitações conhecidas.
+- **ElasticMQ nos testes:** emula a API do SQS localmente, sem conta na AWS nem recursos na nuvem. A porta `OrderEventPublisher` isola a aplicação do SDK, então trocar o endpoint para a AWS real exige só configuração.
 
 ## Roadmap
 
@@ -284,7 +293,12 @@ Cenários de concorrência (PostgreSQL real, mesmas verificações nas três est
 - [x] Fase 3: testes de concorrência com Testcontainers
 - [x] Fase 4: idempotência, ledger de movimentações e erros padronizados
 - [x] Fase 5: OpenAPI e refinamento da documentação
-- [ ] Opcional: reserva de estoque com expiração
+- [x] Fase 6: publicação do evento OrderPlaced no SQS após o commit
+- [x] Fase 7: consumidor opt-in com deduplicação provisória em memória
+- [x] Fase 8: testes de mensageria com ElasticMQ e Testcontainers
+- [x] Fase 9: documentação das limitações e da configuração SQS
+
+**Status:** concluído nesta versão. A próxima evolução natural é a Transactional Outbox, que fecha a janela de perda de evento descrita acima. Ela não faz parte deste projeto.
 
 ## 👨‍💻 Desenvolvido por
 
